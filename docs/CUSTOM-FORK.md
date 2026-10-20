@@ -1,29 +1,33 @@
-# Frozen-12 Alpac fork
+# Своя версия Alpac — Frozen-12
 
-Upstream: https://github.com/Kirill9732/alpac_source
+Исходный проект автора: https://github.com/Kirill9732/alpac_source
 
-`main` follows the author's source. `custom` contains this fork's changes. Keep
-individual features in separate commits and merge them into `custom`.
+Ваш форк: https://github.com/Frozen-12/alpac_source
 
-## Filmix fix
+Ветка `main` предназначена для синхронизации с исходниками автора. Ветка `custom` содержит ваши изменения и выбрана основной в вашем репозитории. Сохраняйте отдельные доработки отдельными коммитами, затем объединяйте их с `custom`.
 
-The effective device token, including a personal Kit override, is checked for
-PRO/PRO+ rights. A verified premium token takes precedence over the separate
-api-fx account, including in `fx_mode = "primary"`. Available qualities are read
-from the API and sorted in descending order. A local `pro = true` flag alone does
-not grant high-quality streams to an unknown personal token.
+## Исправление Filmix
 
-The upstream fallback mode, token health monitoring, and cross-account 429
-re-mint mechanism are retained. Re-mint can use rights confirmed by the existing
-background profile probe. Expired subscriptions are not treated as premium.
+Сервер проверяет права PRO/PRO+ конкретного используемого токена, включая персональный токен из Kit. Подтверждённый премиальный токен получает приоритет перед отдельным аккаунтом api-fx, в том числе при `fx_mode = "primary"`. Доступные качества берутся из ответа API и сортируются от большего к меньшему. Один только флаг `pro = true` в конфигурации не предоставляет премиальные права непроверенному персональному токену.
 
-If a stale personal Kit token overrides a valid global token, remove that
-personal override or replace it through Kit with a valid token. This runtime
-configuration change is separate from the source fix.
+Сохранены механизмы автора: резервное обращение к api-fx, мониторинг состояния токенов и перевыпуск ссылки через другую учётную запись при ответе CDN 429. При перевыпуске учитываются права, подтверждённые фоновой проверкой профиля. Истёкшая подписка не считается действующей премиальной подпиской.
 
-## Merge changes from the author
+Если старый персональный токен Kit перекрывает действующий общий токен, удалите персональное переопределение или замените его через Kit на действующий токен. Это отдельная настройка работающего сервера, которая не входит в патч исходников.
 
-Initial clone:
+Максимальное качество зависит от файла и выбранного перевода. Если у перевода есть только 1080p, исправление не добавит ему 4K.
+
+## Как получать изменения автора через GitHub
+
+1. Откройте ваш репозиторий и выберите ветку `custom`.
+2. Нажмите **Sync fork → Update branch**, если GitHub предлагает слияние без конфликтов.
+3. Дождитесь успешной проверки и сборки на вкладке **Actions**.
+4. Сохраните резервную копию рабочего сервера и установите новую проверенную сборку.
+
+Если GitHub сообщает о конфликтах, сначала разрешите их. Для этого удобно использовать отдельную ветку обновления, как описано ниже.
+
+## Как объединять изменения на компьютере
+
+Для первоначального скачивания нужны Git и Go версии, указанной в `go.mod`. Выполните команды в PowerShell или терминале:
 
 ```sh
 git clone --branch custom https://github.com/Frozen-12/alpac_source.git
@@ -31,8 +35,9 @@ cd alpac_source
 git remote add upstream https://github.com/Kirill9732/alpac_source.git
 ```
 
-Before updating, commit your work and ensure `git status --short` is empty.
-Use a new update branch name each time:
+Здесь `origin` — ваш форк, а `upstream` — репозиторий автора.
+
+Перед обновлением сохраните свои изменения коммитами. Команда `git status --short` должна возвращать пустой результат. Каждый раз используйте новое имя ветки обновления: вместо `YYYY-MM-DD` подставьте дату, а при нескольких обновлениях за день добавьте номер.
 
 ```sh
 git switch custom
@@ -41,56 +46,79 @@ git switch -c update/upstream-YYYY-MM-DD
 git merge upstream/main
 ```
 
-Resolve any conflicts, run the checks, and inspect the diff. To cancel an
-unfinished merge, run `git merge --abort`. For a particular upstream release,
-merge its verified tag or commit instead of `upstream/main`.
+Разрешите конфликты, если они возникли, и проверьте получившиеся изменения. После исправления конфликтующих файлов выполните `git add` для этих файлов и завершите слияние командой `git commit`.
+
+Чтобы отменить незавершённое слияние, выполните `git merge --abort`. Если нужна конкретная версия автора, вместо `upstream/main` укажите проверенный тег или SHA коммита этой версии.
+
+Запустите проверки:
 
 ```sh
 go test ./internal/litesrc ./internal/httpapi -run 'Filmix|PremiumToken|TokenEntitlements' -count=1 -timeout 180s
 go vet ./...
+```
+
+Только после успешных проверок перенесите результат в вашу рабочую ветку:
+
+```sh
 git switch custom
 git merge --ff-only update/upstream-YYYY-MM-DD
 git push origin custom
 ```
 
-Do not reapply the original Filmix patch on top of `custom`: the fix is already
-part of its history. Do not replace `custom` with upstream using a hard reset or
-force push. Review an author's equivalent fix before retiring a local change.
+Повторно накладывать исходный патч Filmix на `custom` не нужно: исправление уже сохранено в истории этой ветки. Не заменяйте `custom` версией автора через `git reset --hard` или принудительную отправку `push --force`. Если автор добавит аналогичное исправление, сравните его с вашим перед удалением собственной правки.
 
-## Checks and downloadable builds
+## Как добавлять собственные доработки
 
-The `Custom checks and Linux build` GitHub Actions workflow runs Filmix regression
-tests, `go vet ./...`, and a Linux amd64 build on pushes and pull requests to
-`custom`. It uploads a binary archive, matching `plugins` and `wwwroot` archives,
-SHA256 sums, and the exact source commit. Artifacts are retained for 30 days.
-For permanent storage, download the artifact or publish a reviewed release.
+Создавайте отдельную ветку от `custom` для каждой доработки:
 
-The full upstream test suite can be enabled for a manual workflow run. It is
-not the default gate: the upstream suite includes platform/environment-sensitive
-tests. Initial Windows validation passed Filmix tests and vet; the full suite
-also encountered Windows file-permission, process-execution, and unrelated
-fixture failures. No claim is made that all upstream tests pass on every host.
+```sh
+git switch custom
+git switch -c feature/my-change
+```
 
-To use manual runs when `main` remains the default branch, open this workflow on
-`custom`, or set `custom` as the repository default branch. The push trigger works
-without changing the default branch.
+Имя `my-change` замените названием своей доработки. Внесите изменения, проверьте их, добавьте нужные файлы через `git add` и сохраните коммит командой `git commit`. После этого объедините доработку:
 
-## Deployment
+```sh
+git switch custom
+git merge feature/my-change
+git push origin custom
+```
 
-The workflow does not automatically deploy to a server and needs no server
-credentials. Review the build, make a runtime backup/snapshot, then install the
-binary and any changed frontend assets from the same commit. Preserve local
-configuration, databases, and keys. Use a health check and keep the previous
-binary for rollback.
+## Проверки и готовые сборки
 
-The built-in updater downloads complete releases from a compatible update
-server; it does not merge Git changes. Installing an official release can replace
-this fork's binary. Keep `[updater] auto_install = false` while deploying custom
-builds manually. Any external cron/timer update script must be handled separately.
-A GitHub repository URL is not a compatible updater `server_url` by itself.
+Процесс GitHub Actions с названием **Custom checks and Linux build** запускается при отправке изменений в `custom`, в ветки `feature/...` и `update/...`, а также для запросов на слияние в `custom`. Он выполняет тесты Filmix, статическую проверку `go vet ./...` и сборку для Linux amd64.
 
-## Runtime files
+Чтобы скачать результат:
 
-Never commit working configuration, tokens, keys, database contents, or backups.
-The repository is for source only. In addition to upstream ignores, this fork
-ignores `.kitkey`, backup directories, and local PID files.
+1. Откройте вкладку **Actions** в вашем репозитории.
+2. Выберите успешный запуск **Custom checks and Linux build**.
+3. В разделе **Artifacts** скачайте архив `alpac-linux-amd64-...`.
+
+В архив входят исполняемый файл сервера, соответствующие ему архивы `plugins` и `wwwroot`, контрольные суммы SHA256 и информация о точном коммите исходников. Артефакты хранятся 30 дней. Для постоянного хранения скачайте архив на свой компьютер или опубликуйте проверенный выпуск в разделе Releases.
+
+Для ручного запуска откройте этот процесс на вкладке **Actions** и нажмите **Run workflow**, выбрав ветку `custom`. При необходимости включите параметр **Also run the full upstream short test suite** — он запускает полный набор коротких тестов автора дополнительно к обязательным проверкам.
+
+Полный набор не включён в обязательные проверки: часть тестов зависит от операционной системы и окружения. При первоначальной проверке на Windows тесты Filmix и `go vet` прошли, а полный набор выявил ошибки прав доступа к файлам, запуска процессов и тестовых данных других компонентов. Успешная сборка не означает, что полный набор тестов прошёл во всех окружениях.
+
+## Установка на сервер
+
+GitHub Actions подготавливает архивы для скачивания. Автоматическая установка в LXC не настроена, данные для доступа к серверу этому процессу не передаются.
+
+Перед установкой проверьте результат сборки и сделайте резервную копию конфигурации и данных либо снимок контейнера. Устанавливайте исполняемый файл и изменённые клиентские файлы из одной сборки. Сохраняйте рабочие конфиги, базу данных и ключи. После установки проверьте запуск сервиса и воспроизведение, а предыдущий исполняемый файл оставьте для отката.
+
+Встроенный обновлятор скачивает готовые выпуски с совместимого сервера обновлений. Он не объединяет изменения Git. Установка официального выпуска может заменить исполняемый файл вашей версии.
+
+При ручной установке собственных сборок оставляйте в существующем разделе конфигурации:
+
+```toml
+[updater]
+auto_install = false
+```
+
+Если раздел `[updater]` уже есть, измените параметр в нём, не добавляя второй одноимённый раздел. Этот параметр не запрещает ручную установку обновления через админ-панель. Внешние задания cron, таймеры и скрипты обновления настраиваются отдельно.
+
+Обычная ссылка на репозиторий GitHub сама по себе не подходит для параметра `server_url`: встроенному обновлятору нужен совместимый API выпусков.
+
+## Какие файлы хранить отдельно
+
+В репозиторий отправляются исходники. Рабочие конфиги, токены, ключи, содержимое базы данных и резервные копии должны храниться отдельно. В дополнение к исключениям автора в `.gitignore` добавлены `.kitkey`, папка резервных копий и локальные PID-файлы.
