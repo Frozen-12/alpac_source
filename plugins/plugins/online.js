@@ -854,8 +854,16 @@
                 var element = first;
 				element.isonline = true;
                 if (filter_find.voice && filter_find.voice.length > 1) {
-                  element.voices = filter_find.voice;
-                  element.voice_index = _this5.getChoice(balanser).voice || 0;
+                  var attachVoices = function(play) {
+                    play.voices = filter_find.voice;
+                    play.voice_index = _this5.getChoice(balanser).voice || 0;
+                    play.onvoicechange = function(index) {
+                      var voice = filter_find.voice[index];
+                      if (voice) _this5.replaceChoice({voice: index, voice_url: voice.url, voice_name: voice.title});
+                    };
+                  };
+                  attachVoices(element);
+                  playlist.forEach(attachVoices);
                 }
                 {player-inner}
                 if (window.__batchTranscoding && playlist.length > 1) {

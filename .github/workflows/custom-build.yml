@@ -33,6 +33,8 @@ jobs:
           cache: true
       - name: Filmix regression tests
         run: go test ./internal/litesrc ./internal/httpapi -run 'Filmix|PremiumToken|TokenEntitlements' -count=1 -timeout 180s
+      - name: In-player voice switching tests
+        run: node --test scripts/tests/voice_switcher.test.cjs
       - name: Static checks
         run: go vet ./...
       - name: Full upstream tests (optional)
