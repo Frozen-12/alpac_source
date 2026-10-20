@@ -15,6 +15,9 @@ func proxyCompatMiddleware(proxyHandler *uproxy.Handler, proxyImgHandler http.Ha
 			path := strings.ToLower(r.URL.Path)
 
 			switch {
+			case strings.HasPrefix(path, "/proxy/filmix-audio/"):
+				litesrc.FilmixAudioMasterHandler(w, r)
+				return
 			case strings.HasPrefix(path, "/proxyimg:"):
 				if proxyImgHandler != nil {
 					proxyImgHandler.ServeHTTP(w, r)

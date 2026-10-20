@@ -1047,6 +1047,10 @@ func (f *filmixChecker) writeSerial(
 	token string,
 	links *proxylink.Manager,
 ) {
+	if req.URL.Query().Get("audio_mux") == "1" {
+		f.writeAudioMux(w, req, root, s, t, token, links)
+		return
+	}
 	playlist := root.PlayerLinks.Playlist
 	if len(playlist) == 0 {
 		writeGetsTVEmpty(w, rjson)

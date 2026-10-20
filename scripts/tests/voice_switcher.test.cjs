@@ -196,12 +196,15 @@ function externalFixture(options = {}) {
     card: {id: 123, name: 'Series'}, subtitles: [{url: 'https://server.test/old-subs'}]});
   return f;
 }
-function externalResponse(episodes = [2, 3, 4]) {
-  return JSON.stringify({data: episodes.map(e => ({method: 'play', s: 1, e,
-    quality: {'1080p': `https://server.test/voice-${e}-1080`, '2160p': `https://server.test/voice-${e}-2160`}}))});
+function audioResult(overrides = {}) {
+  return JSON.stringify({url: 'https://server.test/proxy/filmix-audio/current.m3u8',
+    tracks: 2, total: 4, episodes: {
+      '3': 'https://server.test/proxy/filmix-audio/current.m3u8',
+      '4': 'https://server.test/proxy/filmix-audio/next.m3u8'
+    }, ...overrides});
 }
 
-test('external voice mode is opt-in and preserves the native receiver, arguments and result by default', () => {
+test('external voice mode is opt-in and preserves native arguments and return by default', () => {
   const f = externalFixture({mode: 'episodes'});
   assert.equal(f.settings[0].param.default, 'episodes');
   assert.equal(f.Lampa.Android.openPlayer(f.data.url, f.data, 'extra'), 'native-result');
@@ -210,82 +213,80 @@ test('external voice mode is opt-in and preserves the native receiver, arguments
   assert.deepEqual(f.launches[0].args, [f.data.url, f.data, 'extra']);
 });
 
-test('Android receives only this exact episode, each voice at maximum quality, without nested playlists', () => {
+test('Android receives one HLS master with real audio renditions and keeps series ordering and progress', () => {
   const f = externalFixture();
   f.Lampa.Android.openPlayer(f.data.url, f.data);
-  assert.equal(f.launches.length, 0);
+  const query = new URL(f.requests[0].options.url).searchParams;
+  assert.equal(query.get('audio_mux'), '1');
+  assert.equal(query.get('e'), '3');
+  assert.equal(query.get('s'), '1');
+  assert.equal(query.get('t'), '0');
   assert.equal(f.requests[0].options.headers['X-Lampac-Token'], 'test-auth');
-  f.requests[0].options.success(externalResponse());
+  assert.equal(f.launches.length, 0);
+  f.requests[0].options.success(audioResult());
   const [url, data] = f.launches[0].args;
-  assert.equal(url, 'https://server.test/selected-2160');
-  assert.deepEqual(data.playlist.map(item => item.url), [url, 'https://server.test/voice-3-2160']);
-  assert.match(data.playlist[1].title, /HDRezka 4K \[2160p\]/);
+  assert.equal(new URL(url).pathname, '/proxy/filmix-audio/current.m3u8');
   assert.equal(data.position, 87);
   assert.equal(data.timeline.hash, 'episode-1-3');
   assert.equal(data.card.id, 123);
-  assert.equal(data.playlist[1].subtitles, undefined);
-  assert.equal(data.playlist[1].timeline.hash, data.timeline.hash);
-  const serialized = JSON.parse(JSON.stringify(data));
-  assert.equal(serialized.playlist[0].playlist, undefined);
-  assert.equal(serialized.playlist[1].voices, undefined);
-  assert.equal(f.data.playlist.length, 3); // The original series playlist is intact.
-  assert.equal(f.timers.size, 0);
+  assert.deepEqual(data.quality, {});
+  assert.deepEqual(data.playlist.map(item => item.episode), [2, 3, 4]);
+  assert.equal(new URL(data.playlist[2].url).pathname, '/proxy/filmix-audio/next.m3u8');
+  assert.equal(data.playlist[2].timeline, f.data.playlist[2].timeline);
+  assert.equal(f.data.playlist[2].url, 'old-4');
+  assert.match(f.messages.at(-1), /аудиодорожек — 2/);
+  assert.match(f.messages.at(-1), /длительностью исключены/);
 });
 
-test('selected translation is first even when its original index is not zero', () => {
+test('selected voice supplies the matching season and video cut for the server composer', () => {
   const f = externalFixture();
   f.data.voice_index = 1;
   f.Lampa.Android.openPlayer(f.data.url, f.data);
-  f.requests[0].options.success(externalResponse());
-  const data = f.launches[0].args[1];
-  assert.match(data.playlist[0].title, /HDRezka 4K/);
-  assert.match(data.playlist[1].title, /Amedia/);
-});
-
-test('missing episodes and request failures still launch the selected video once', () => {
-  for (const fail of [request => request.options.success(externalResponse([1, 2])),
-    request => request.options.error(null, 'timeout')]) {
-    const f = externalFixture();
-    f.Lampa.Android.openPlayer(f.data.url, f.data);
-    fail(f.requests[0]);
-    assert.equal(f.launches.length, 1);
-    assert.equal(f.launches[0].args[1].playlist.length, 1);
-    assert.match(f.messages.at(-1), /недоступна/);
-  }
-});
-
-test('lazy voice resolution uses authenticated same-server requests and preserves its own metadata', () => {
-  const f = externalFixture();
-  f.Lampa.Android.openPlayer(f.data.url, f.data);
-  f.requests[0].options.success(JSON.stringify({data: [{method: 'call', s: 1, e: 3,
-    url: 'https://server.test/lite/filmix/resolve'}]}));
-  assert.equal(f.launches.length, 0);
-  f.requests[1].options.success(JSON.stringify({url: 'https://cdn.test/resolved',
-    subtitles: [{url: 'https://cdn.test/subs'}], headers: {'User-Agent': 'source-agent'}}));
-  assert.equal(f.launches[0].args[1].playlist[1].url, 'https://cdn.test/resolved');
-  assert.equal(f.launches[0].args[1].playlist[1].headers['User-Agent'], 'source-agent');
-});
-
-test('foreign API URLs never receive authentication headers, including lazy redirects', () => {
-  for (const lazy of [false, true]) {
-    const f = externalFixture();
-    if (!lazy) f.data.voices[1].url = 'https://other.test/lite/filmix';
-    f.Lampa.Android.openPlayer(f.data.url, f.data);
-    if (lazy) f.requests[0].options.success(JSON.stringify({data: [{method: 'call', s: 1, e: 3,
-      url: 'https://other.test/resolve'}]}));
-    assert.equal(f.requests.length, lazy ? 1 : 0);
-    assert.equal(f.launches[0].args[1].playlist.length, 1);
-  }
-});
-
-test('total timeout aborts requests, ignores late results and launches a single partial playlist', () => {
-  const f = externalFixture();
-  f.Lampa.Android.openPlayer(f.data.url, f.data);
-  [...f.timers.values()].find(timer => timer.ms === 12000).fn();
-  assert.equal(f.requests[0].aborted, true);
-  f.requests[0].options.success(externalResponse());
+  assert.equal(new URL(f.requests[0].options.url).searchParams.get('t'), '1');
+  f.requests[0].options.success(audioResult());
   assert.equal(f.launches.length, 1);
-  assert.equal(f.launches[0].args[1].playlist.length, 1);
+});
+
+test('disabled episode autoplay does not prevent audio selection within the current HLS', () => {
+  const f = externalFixture({playlistNext: false});
+  f.Lampa.Android.openPlayer(f.data.url, f.data);
+  assert.equal(f.requests.length, 1);
+  f.requests[0].options.success(audioResult());
+  assert.equal(f.launches.length, 1);
+});
+
+test('HTTP errors and older servers fall back to the selected video once', () => {
+  for (const response of [null, '', '<html>old response</html>', '{"data":[]}', '{"tracks":2}']) {
+    const f = externalFixture();
+    f.Lampa.Android.openPlayer(f.data.url, f.data);
+    if (response === null) f.requests[0].options.error(null, 'timeout');
+    else f.requests[0].options.success(response);
+    assert.equal(f.launches.length, 1);
+    assert.equal(f.launches[0].args[1], f.data);
+    assert.match(f.messages.at(-1), /Запуск выбранного перевода/);
+  }
+});
+
+test('foreign selected API and foreign master response never receive credentials', () => {
+  for (const foreignAPI of [false, true]) {
+    const f = externalFixture();
+    if (foreignAPI) f.data.voices[0].url = 'https://other.test/lite/filmix';
+    f.Lampa.Android.openPlayer(f.data.url, f.data);
+    if (!foreignAPI) f.requests[0].options.success(audioResult({url: 'https://other.test/master.m3u8'}));
+    assert.equal(f.requests.length, foreignAPI ? 0 : 1);
+    assert.equal(f.launches[0].args[1], f.data);
+  }
+});
+
+test('only native audio master responses are accepted; foreign next-episode URLs are ignored', () => {
+  const f = externalFixture();
+  f.Lampa.Android.openPlayer(f.data.url, f.data);
+  f.requests[0].options.success(audioResult({episodes: {'4': 'https://other.test/next.m3u8'}}));
+  assert.equal(f.launches[0].args[1].playlist[2].url, 'old-4');
+  const bad = externalFixture();
+  bad.Lampa.Android.openPlayer(bad.data.url, bad.data);
+  bad.requests[0].options.success(audioResult({url: 'https://server.test/unrelated'}));
+  assert.equal(bad.launches[0].args[1], bad.data);
 });
 
 test('a new play or player destruction prevents a stale external launch', () => {
@@ -293,22 +294,10 @@ test('a new play or player destruction prevents a stale external launch', () => 
     const f = externalFixture();
     f.Lampa.Android.openPlayer(f.data.url, f.data);
     f.Lampa.Player.listener.send(event, {});
-    f.requests[0].options.success(externalResponse());
+    f.requests[0].options.success(audioResult());
     assert.equal(f.requests[0].aborted, true);
     assert.equal(f.launches.length, 0);
-    assert.equal(f.timers.size, 0);
   }
-});
-
-test('parallel requests are bounded and playlist order is stable regardless of completion order', () => {
-  const f = externalFixture();
-  f.data.voices = [0, 1, 2, 3, 4].map(i => ({title: `Voice ${i}`, url: `https://server.test/lite/filmix?t=${i}`}));
-  f.Lampa.Android.openPlayer(f.data.url, f.data);
-  assert.equal(f.requests.length, 3);
-  f.requests[2].options.success(externalResponse());
-  assert.equal(f.requests.length, 4);
-  for (const i of [3, 1, 0]) f.requests[i].options.success(externalResponse());
-  assert.deepEqual(f.launches[0].args[1].playlist.map(item => item.voice_index), [0, 1, 2, 3, 4]);
 });
 
 test('movies, non-Filmix sources and non-Android platforms keep their usual launch', () => {
@@ -321,12 +310,4 @@ test('movies, non-Filmix sources and non-Android platforms keep their usual laun
     assert.equal(f.requests.length, 0);
     assert.equal(f.launches[0].args[1], f.data);
   }
-});
-
-test('disabled Android playlist transfer gives actionable guidance and preserves normal launch', () => {
-  const f = externalFixture({playlistNext: false});
-  f.Lampa.Android.openPlayer(f.data.url, f.data);
-  assert.equal(f.requests.length, 0);
-  assert.equal(f.launches[0].args[1], f.data);
-  assert.match(f.messages.at(-1), /Следующая серия/);
 });

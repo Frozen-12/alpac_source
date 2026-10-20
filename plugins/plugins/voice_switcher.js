@@ -75,28 +75,25 @@
     return { url: key ? clean[key] : firstURL(item.url || item.stream), quality: clean, name: key || '' };
   }
 
-  // The Android shell converts data.playlist into ViMu's asusfilelist/asusnamelist.
-  // Separate Filmix files cannot be exposed as embedded audio tracks by this API.
+  // Native audio selection requires a multi-rendition HLS stream, rather
+  // than a playlist of unrelated video files.
   function installExternal(env, authURL, headers) {
     var L = env.Lampa, $ = env.jQuery || env.$, active = null;
     var setting = 'filmix_external_playlist';
     if (L.SettingsApi) L.SettingsApi.addParam({
       component: 'player',
       param: { name: setting, type: 'select', default: 'episodes', values: {
-        episodes: 'Серии', voices: 'Озвучки текущей серии (Vimu, эксперимент)'
+        episodes: 'Обычный запуск', voices: 'Озвучки в меню «Аудио» (Vimu, эксперимент)'
       } },
       field: { name: 'Filmix: плейлист внешнего плеера',
-        description: 'Android/Vimu: озвучки вместо серий, максимальное качество. В Lampa включите «Следующая серия». Позиция при смене файла зависит от Vimu.' }
+        description: 'Максимальное видео и отдельные аудиодорожки совместимых по длительности версий. Переводы с другим монтажом выбираются перед просмотром.' }
     });
     if (!L.Android || typeof L.Android.openPlayer !== 'function') return;
     var original = L.Android.openPlayer;
-
     function cancel() {
       if (!active) return;
-      active.stopped = true;
-      env.clearTimeout(active.timer);
-      active.requests.forEach(function (xhr) { xhr.abort(); });
-      active = null;
+      var job = active; active = null; job.stopped = true;
+      if (job.request) job.request.abort();
     }
     if (L.Player && L.Player.listener) {
       L.Player.listener.follow('create', cancel);
@@ -114,89 +111,53 @@
           !data || !number(data.season) || !number(data.episode) || !filmix) {
         return original.apply(receiver, args);
       }
-      if (L.Storage.field && L.Storage.field('playlist_next') === false) {
-        L.Noty.show('Для озвучек Vimu включите «Следующая серия» в настройках плеера Lampa');
-        return original.apply(receiver, args);
-      }
-      var job = { stopped: false, requests: [], slots: [], remaining: voices.length - 1,
-        cursor: 0, running: 0, timer: null };
+      var job = { stopped: false, request: null };
       active = job;
       var selected = Math.max(0, Math.min(number(data.voice_index), voices.length - 1));
-      var queue = voices.map(function (_, index) { return index; }).filter(function (index) { return index !== selected; });
-      var currentStream = chooseStream(data); // Maximum quality, including the initially selected voice.
-      if (!currentStream.url) currentStream.url = url;
-
-      function entry(source, stream, index) {
-        // Do not copy the original nested playlist or lazy callback functions to Android.
-        var item = Object.assign({}, data, source, { url: stream.url, quality: stream.quality,
-          title: (data.title || 'Сезон ' + data.season + ', серия ' + data.episode) +
-            ' — ' + (voices[index].title || voices[index].name || 'Озвучка ' + (index + 1)) +
-            (stream.name ? ' [' + stream.name + ']' : ''),
-          season: number(data.season), episode: number(data.episode), voice_index: index });
-        delete item.playlist; delete item.voices; delete item.onvoicechange;
-        // Each file keeps its own audio/subtitle/header metadata.
-        ['subtitles', 'subtitles_call', 'translate', 'headers', 'http_headers', 'fxdirect'].forEach(function (key) {
-          if (index !== selected && !Object.prototype.hasOwnProperty.call(source, key)) delete item[key];
-        });
-        return item;
-      }
-      job.slots[selected] = entry({}, currentStream, selected);
-      function finish() {
+      var target;
+      function fallback() {
         if (job.stopped || active !== job) return;
         job.stopped = true; active = null;
-        env.clearTimeout(job.timer);
-        job.requests.forEach(function (xhr) { xhr.abort(); });
-        // Current voice first also works with older Android shells which trim the playlist.
-        var list = [job.slots[selected]].concat(job.slots.filter(function (item, index) {
-          return item && index !== selected;
-        }));
-        var launch = Object.assign({}, data, job.slots[selected], { playlist: list });
-        delete launch.voices; delete launch.onvoicechange;
-        L.Noty.show('Vimu: озвучек — ' + list.length + '. Выбор через плейлист; тайм-код может сброситься' +
-          (list.length < voices.length ? '. Часть озвучек недоступна' : ''));
-        original.call(receiver, launch.url, launch);
+        L.Noty.show('Filmix: многодорожечный HLS недоступен. Запуск выбранного перевода');
+        original.apply(receiver, args);
       }
-      function get(target, done) {
-        var safe;
-        try { safe = authURL(target); } catch (e) { done(null); return; }
-        var xhr = $.ajax({ url: safe, type: 'GET', dataType: 'text', timeout: 8000,
-          headers: headers(), success: function (body) { if (!job.stopped) done(body); },
-          error: function () { if (!job.stopped) done(null); }
-        });
-        job.requests.push(xhr);
-      }
-      function complete(index, source) {
-        if (job.stopped || active !== job) return;
-        var stream = source && chooseStream(source);
-        // Only resolved network URLs can be serialized to the native player.
-        if (stream && /^https?:\/\//i.test(stream.url)) job.slots[index] = entry(source, stream, index);
-        job.remaining--; job.running--;
-        if (!job.remaining) finish(); else pump();
-      }
-      function resolve(index) {
-        get(voices[index].url, function (body) {
-          var match;
-          try { match = body && findEpisode(parseItems(body, $), data.season, data.episode); } catch (e) {}
-          if (!match) { complete(index, null); return; }
-          if (match.method !== 'call') { complete(index, match); return; }
-          get(match.url, function (resolved) {
-            try {
-              var value = JSON.parse(resolved);
-              if (!value || value.method === 'call') throw new Error('Unresolved source');
-              complete(index, Object.assign({}, match, value));
-            } catch (e) { complete(index, null); }
+      try {
+        target = new env.URL(authURL(voices[selected].url));
+        target.searchParams.set('audio_mux', '1');
+        target.searchParams.set('e', data.episode);
+        target.searchParams.set('rjson', 'true');
+      } catch (e) { fallback(); return; }
+      L.Noty.show('Filmix: подготовка аудиодорожек…');
+      job.request = $.ajax({
+        url: target.href, type: 'GET', dataType: 'text', timeout: 30000, headers: headers(),
+        success: function (body) {
+          if (job.stopped || active !== job) return;
+          var result;
+          try {
+            result = typeof body === 'string' ? JSON.parse(body) : body;
+            var master = new env.URL(authURL(result.url));
+            if (master.pathname.indexOf('/proxy/filmix-audio/') !== 0 || !number(result.tracks)) throw new Error('Invalid master');
+          } catch (e) { fallback(); return; }
+          job.stopped = true; active = null;
+          // The following episodes also get lazy masters, while retaining their
+          // timeline/card metadata and ordinary series ordering.
+          var list = (data.playlist || []).map(function (item) {
+            var next = Object.assign({}, item);
+            var link = result.episodes && result.episodes[number(item.episode)];
+            if (number(item.season) === number(data.season) && link) {
+              try { next.url = authURL(link); next.quality = {}; } catch (e) {}
+            }
+            return next;
           });
-        });
-      }
-      function pump() {
-        while (!job.stopped && job.running < 3 && job.cursor < queue.length) {
-          var index = queue[job.cursor++]; job.running++; resolve(index);
-        }
-      }
-      L.Noty.show('Подготовка озвучек для Vimu…');
-      // Bound total launch delay, even with many unavailable translations.
-      job.timer = env.setTimeout(finish, 12000);
-      pump();
+          var launch = Object.assign({}, data, { url: master.href, quality: {}, playlist: list });
+          delete launch.voices; delete launch.onvoicechange;
+          if (list.length && L.Player.playlist) L.Player.playlist(list);
+          L.Noty.show('Filmix: аудиодорожек — ' + result.tracks + '. Выбор в меню «Аудио» Vimu' +
+            (number(result.total) > number(result.tracks) ? '. Версии с другой длительностью исключены' : ''));
+          original.call(receiver, master.href, launch);
+        },
+        error: function (_, status) { if (status !== 'abort') fallback(); }
+      });
     };
     return { cancel: cancel };
   }
