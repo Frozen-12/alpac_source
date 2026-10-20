@@ -193,14 +193,13 @@
           var time = video && isFinite(video.currentTime) ? video.currentTime : 0;
           var paused = video && video.paused;
           var preferred = selected.data.quality_switched;
-          if (selected.data.voice_quality_preference && preferred === selected.data.voice_quality_current) {
+          if (selected.data.voice_quality_preference !== undefined && preferred === selected.data.voice_quality_current) {
             preferred = selected.data.voice_quality_preference;
           }
           if (!preferred) {
-            var oldMap = selected.data.quality || {};
-            preferred = Object.keys(oldMap).find(function (q) {
-              return firstURL(oldMap[q]) === selected.data.url;
-            }) || video && video.videoHeight;
+            // An automatic/default selection is an intent, not the old file's
+            // actual resolution. In auto mode choose the new voice's maximum.
+            preferred = L.Storage.field ? number(L.Storage.field('video_quality_default')) : 0;
           }
           var stream = chooseStream(source, preferred);
           if (!stream.url) { notice('Не удалось получить ссылку на видео'); back(); return; }

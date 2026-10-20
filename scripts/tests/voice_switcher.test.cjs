@@ -112,6 +112,26 @@ test('returns to the requested quality after a lower-quality translation', () =>
   assert.equal(f.changes[1].url, 'new-3-2160');
 });
 
+test('an explicit quality change overrides automatic voice quality', () => {
+  const f = fixture();
+  f.controller.switchVoice(1);
+  f.requests[0].options.success(response());
+  f.data.quality_switched = '1080p';
+  f.controller.switchVoice(0);
+  f.requests[1].options.success(response());
+  assert.equal(f.changes[1].url, 'new-3-1080');
+});
+
+test('respects the configured quality preference even if the old voice lacked it', () => {
+  const f = fixture();
+  f.Lampa.Storage.field = () => '2160';
+  f.data.quality = {'1080p': 'old-2160'};
+  f.current().videoHeight = 1080;
+  f.controller.switchVoice(1);
+  f.requests[0].options.success(response());
+  assert.equal(f.changes[0].url, 'new-3-2160');
+});
+
 test('late response cannot change a different episode or a destroyed player', () => {
   const f = fixture();
   f.controller.switchVoice(1);
