@@ -85,7 +85,7 @@
       param: { name: setting, type: 'select', default: 'episodes', values: {
         episodes: 'Обычный запуск', voices: 'Озвучки в меню «Аудио» (Vimu, эксперимент)'
       } },
-      field: { name: 'Filmix: плейлист внешнего плеера',
+      field: { name: 'Filmix: аудиодорожки в Vimu',
         description: 'Максимальное видео и отдельные аудиодорожки совместимых по длительности версий. Переводы с другим монтажом выбираются перед просмотром.' }
     });
     if (!L.Android || typeof L.Android.openPlayer !== 'function') return;
