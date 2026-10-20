@@ -29,5 +29,10 @@ node_modules/
 .DS_Store
 *.swp
 
+# Local secret keys and deployment backups
+/.kitkey
+/backups/
+*.pid
+
 # IPTV EPG cache written by tests
 internal/iptv/epg_cache/

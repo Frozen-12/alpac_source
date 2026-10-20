@@ -1,0 +1,71 @@
+name: Custom checks and Linux build
+
+on:
+  push:
+    branches: [custom, 'feature/**', 'update/**']
+  pull_request:
+    branches: [custom]
+  workflow_dispatch:
+    inputs:
+      full_test_suite:
+        description: 'Also run the full upstream short test suite'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Filmix regression tests
+        run: go test ./internal/litesrc ./internal/httpapi -run 'Filmix|PremiumToken|TokenEntitlements' -count=1 -timeout 180s
+      - name: Static checks
+        run: go vet ./...
+      - name: Full upstream tests (optional)
+        if: github.event_name == 'workflow_dispatch' && inputs.full_test_suite
+        run: go test -short ./... -timeout 300s
+      - name: Build Linux amd64
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          version="custom-$(git rev-parse --short HEAD)"
+          built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go build -trimpath -ldflags "-s -w -X main.version=$version -X main.commit=$GITHUB_SHA -X main.buildDate=$built_at" -o dist/lampac-go ./cmd/lampac-go
+          printf 'Repository: %s\nCommit: %s\nVersion: %s\nBuilt: %s\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$version" "$built_at" > dist/BUILD-INFO.txt
+      - name: Package matching frontend assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf dist/lampac-go-linux-amd64.tar.gz -C dist lampac-go BUILD-INFO.txt
+          tar -czf dist/plugins.tar.gz plugins
+          tar -czf dist/wwwroot.tar.gz wwwroot
+          cd dist
+          sha256sum lampac-go-linux-amd64.tar.gz plugins.tar.gz wwwroot.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: alpac-linux-amd64-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/BUILD-INFO.txt
+          if-no-files-found: error
+          retention-days: 30
