@@ -102,12 +102,13 @@ type filmixChecker struct {
 	pro           bool
 	// fxPrimary keeps the old api-fx-first order (config fx_mode = 'primary');
 	// default is legacy first with api-fx as the fallback.
-	fxPrimary bool
-	reserve   bool
-	hls       bool
-	rhub      bool
-	userIDs   sync.Map
-	tokenMux  sync.Mutex
+	fxPrimary   bool
+	reserve     bool
+	hls         bool
+	rhub        bool
+	userIDs     sync.Map
+	tokenMux    sync.Mutex
+	tokenRights sync.Map // effective device token -> filmixTokenRights
 
 	// api.filmix.tv (api-fx) state — the path that still serves >720p, see filmix_fx.go.
 	fxHost        string
@@ -428,6 +429,19 @@ func (f *filmixChecker) index(w http.ResponseWriter, req *http.Request, links *p
 		return
 	}
 
+	// A verified premium device token takes precedence over the separate api-fx
+	// account. Never let a non-premium login replace that token's signed URLs.
+	var tokenPost filmixPostRoot
+	var tokenPostOK, tokenPostFetched bool
+	if f.tokenHasPremium(ctx, token) {
+		tokenPost, tokenPostOK = f.post(ctx, postID, token)
+		tokenPostFetched = true
+		if tokenPostOK && f.tokenPostPlayable(tokenPost, token) {
+			f.writeTpl(w, req, rjson, tokenPost, postID, title, originalTitle, t, sSet, s, token, links)
+			return
+		}
+	}
+
 	if f.fxPrimary {
 		// fx_mode = 'primary' — the pre-2026-09 order. api-fx first: since 2026-07
 		// the legacy /s/ hashes are capped at 720p server-side (higher qualities
@@ -440,7 +454,10 @@ func (f *filmixChecker) index(w http.ResponseWriter, req *http.Request, links *p
 			f.writeFX(w, req, rjson, movies, serial, postID, title, originalTitle, t, sSet, s, links)
 			return
 		}
-		post, ok := f.post(ctx, postID, token)
+		post, ok := tokenPost, tokenPostOK
+		if !tokenPostFetched {
+			post, ok = f.post(ctx, postID, token)
+		}
 		if !ok {
 			if fxOK {
 				f.writeFX(w, req, rjson, movies, serial, postID, title, originalTitle, t, sSet, s, links)
@@ -459,7 +476,10 @@ func (f *filmixChecker) index(w http.ResponseWriter, req *http.Request, links *p
 	// (403 / outage), the title is RKN-blocked there, or every row is a
 	// "купите премиум" stub. Mirrors lampac-nextgen, where Filmix (legacy +
 	// pro token) and the api-fx contour are separate and legacy is the default.
-	post, ok := f.post(ctx, postID, token)
+	post, ok := tokenPost, tokenPostOK
+	if !tokenPostFetched {
+		post, ok = f.post(ctx, postID, token)
+	}
 	if ok && f.legacyPlayable(post) {
 		f.writeTpl(w, req, rjson, post, postID, title, originalTitle, t, sSet, s, token, links)
 		return
@@ -914,10 +934,8 @@ func (f *filmixChecker) writeTpl(
 		return
 	}
 
-	// NOTE: the response "quality" field is not usable for pro detection —
-	// since 2026-07 it reports the CONTENT's max quality ("2160" even anonymous),
-	// not the account tier. The tier comes from config (`pro`) and is applied by
-	// allowQuality; see its doc for the 2026-09 re-verification of legacy 4K.
+	// A post's quality describes the title, not the account. High qualities are
+	// enabled only after checking the effective device token's user profile.
 
 	if len(root.PlayerLinks.Movie) > 0 {
 		f.writeMovie(w, req, rjson, root.PlayerLinks.Movie, postID, title, originalTitle, token, links)
@@ -952,7 +970,7 @@ func (f *filmixChecker) writeMovie(
 
 	for _, movie := range movies {
 		// Без подтверждённых прав HEVC/HDR-рипы отдают заглушку «купите премиум» — не показываем.
-		if f.filmixHideUnplayable(movie.Translation, movie.Link) {
+		if filmixMovieBlocked(movie.Translation) || (!f.cachedTokenPremium(token) && f.filmixHideUnplayable(movie.Translation, movie.Link)) {
 			continue
 		}
 		streams := f.buildMovieStreams(movie, token, cdns)
@@ -980,7 +998,7 @@ func (f *filmixChecker) writeMovie(
 		}
 		// ★Даже когда сервер отдал легаси ≤720 (его api-fx гео-заблокирован из ДЦ), RU-клиент
 		// сам НЕ заблокирован → браузерный минт добудет прямой 4K. Поэтому fxdirect тут особенно ценен.
-		if f.fxDirectLampa {
+		if f.fxDirectLampa && !f.cachedTokenPremium(token) {
 			row["fxdirect"] = f.filmixRowFxDirect(postID, name, 0, 0)
 		}
 		if len(streams) > 1 {
@@ -1197,7 +1215,7 @@ func (f *filmixChecker) writeSerial(
 			"title":         fmt.Sprintf("%s (%s)", baseTitle, label),
 			"streamquality": streams,
 		}
-		if f.fxDirectLampa {
+		if f.fxDirectLampa && !f.cachedTokenPremium(token) {
 			row["fxdirect"] = f.filmixRowFxDirect(postID, voiceNames[t], seasonNum, episodeNum)
 		}
 		if len(streams) > 1 {
@@ -1369,28 +1387,16 @@ func randomHex16() string {
 	return hex.EncodeToString(b[:])
 }
 
-// allowQuality gates the LEGACY filmixapp.cyou path.
-//
-//   - no token: 480p only (filmix's free tier);
-//   - token without `pro`: up to 720p;
-//   - token + `pro = true`: every quality the link template lists — the same
-//     rule lampac-nextgen applies (`if (!pro) cap at 720`).
-//
-// The 2026-07 note that /s/ hashes "never authorize >720p" was re-verified
-// 2026-09-02 against the production pro token: SDR rips stream the real file
-// (Дюна 2160p = 7.7 GB, 1440p = 5.8 GB, 1080p = 3.6 GB, all HTTP 206). What
-// DOES stub without subscription rights is the HEVC/HDR/Dolby family — those
-// rows are still filtered by filmixHideUnplayable, not by a quality cap. The
-// post "quality" field is not consulted: it reports the content's max quality
-// even for anonymous requests.
-//
-// 22.09.2026: права — ещё и по здоровью токена (filmix_tokens.go): по мёртвому/бесправному
-// токену CDN отдаёт ≤720p настоящими, а выше — заглушку, так что `pro` из конфига ему не указ.
+// Only expose high qualities for the effective premium device token. A title's
+// advertised quality and an unrelated api-fx access token do not grant rights.
 func (f *filmixChecker) allowQuality(q int, token string) bool {
+	if q <= 0 {
+		return false
+	}
 	if strings.TrimSpace(token) == "" {
 		return q <= 480
 	}
-	if f.pro && f.tokenUsable(token) {
+	if f.cachedTokenPremium(token) {
 		return true
 	}
 	return q <= 720
@@ -1442,20 +1448,17 @@ func (f *filmixChecker) buildMovieStreams(movie filmixMovie, token string, cdns 
 		return nil
 	}
 
-	// Every quality filmix knows, highest first; the link template
-	// (`…_[2160,1440,1080,720,480,].mp4`) says which ones this rip has and
-	// allowQuality says which ones this account may play.
-	qualities := []int{2160, 1440, 1080, 720, 480}
+	qualities := filmixMovieQualities(movie)
 	out := make([]map[string]string, 0, len(qualities))
 	for _, q := range qualities {
 		if !f.allowQuality(q, token) {
 			continue
 		}
-		if !strings.Contains(link, fmt.Sprintf("%d,", q)) {
-			continue
+		resolved := strings.Replace(link, "_%s.mp4", fmt.Sprintf("_%d.mp4", q), 1)
+		resolved = filmixMovieQualitiesRe.ReplaceAllString(resolved, fmt.Sprintf("_%d.mp4", q))
+		if resolved == link && !strings.Contains(link, fmt.Sprintf("_%d.mp4", q)) {
+			continue // no recognised template for this quality
 		}
-
-		resolved := filmixMovieQualitiesRe.ReplaceAllString(link, fmt.Sprintf("_%d.mp4", q))
 		resolved = f.toHLS(resolved)
 		resolved = filmixReserveLink(resolved, cdns)
 
@@ -1473,13 +1476,7 @@ func (f *filmixChecker) buildEpisodeStreams(item filmixEpisodeItem, token string
 		return nil
 	}
 
-	qualities := make([]int, 0, len(item.Qualities))
-	for _, q := range item.Qualities {
-		if q > 0 {
-			qualities = append(qualities, q)
-		}
-	}
-	sort.Slice(qualities, func(i, j int) bool { return qualities[i] > qualities[j] })
+	qualities := filmixSortedQualities(item.Qualities)
 
 	out := make([]map[string]string, 0, len(qualities))
 	for _, q := range qualities {

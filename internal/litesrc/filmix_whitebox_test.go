@@ -37,10 +37,7 @@ func TestFilmixToHLSLegacyForm(t *testing.T) {
 	}
 }
 
-// Legacy /s/ hashes cap at 720p server-side since 2026-07 (higher qualities
-// stream the premium stub) — allowQuality must never let >720p through, token
-// or not. The old pro auto-detect by the post "quality" field is gone: that
-// field now reports content quality ("2160" even anonymous).
+// Unverified tokens cap at 720p; verified premium tokens expose all qualities.
 func TestFilmixLegacyQualityCap(t *testing.T) {
 	// token without pro: 720p cap.
 	f := &filmixChecker{}
@@ -62,6 +59,7 @@ func TestFilmixLegacyQualityCap(t *testing.T) {
 	// pro token: every quality the rip has — legacy /s/ links stream real 4K
 	// files with a pro token (re-verified 2026-09-02, see allowQuality).
 	pro := &filmixChecker{pro: true}
+	pro.tokenRights.Store("protoken", filmixTokenRights{true, time.Now().Add(time.Minute)})
 	for _, q := range []int{2160, 1440, 1080, 720, 480} {
 		if !pro.allowQuality(q, "protoken") {
 			t.Fatalf("pro token must allow %dp", q)

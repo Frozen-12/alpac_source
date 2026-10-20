@@ -59,8 +59,8 @@ func TestFilmixTokenHealthGatesRights(t *testing.T) {
 	if f.allowQuality(2160, "dead") || f.allowQuality(1080, "dead") || !f.allowQuality(720, "dead") {
 		t.Fatal("мёртвый токен: ≤720p настоящие, выше — заглушка")
 	}
-	if !f.allowQuality(2160, "alive") || !f.allowQuality(2160, "kit-unknown") {
-		t.Fatal("живой и непроверенный (kit) токены дают полное качество")
+	if !f.allowQuality(2160, "alive") || f.allowQuality(2160, "kit-unknown") {
+		t.Fatal("полное качество требует проверки конкретного токена, включая Kit")
 	}
 	if f.filmixHideUnplayable("HEVC 4K AC3", "https://x/s/h/hevc/a_[2160].mp4") {
 		t.Fatal("пока есть живой PRO, HEVC-строки видны")

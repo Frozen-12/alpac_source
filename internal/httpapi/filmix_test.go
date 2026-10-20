@@ -94,7 +94,7 @@ func TestFilmixFullModeMovieFromSourceID(t *testing.T) {
 		t.Fatalf("unexpected selected stream: %#v body=%s", row["url"], rec.Body.String())
 	}
 	streams, _ := row["streamquality"].([]any)
-	if len(streams) != 1 {
+	if len(streams) != 2 {
 		t.Fatalf("unexpected streamquality count: %d body=%s", len(streams), rec.Body.String())
 	}
 }
@@ -236,12 +236,14 @@ func fxServer(t *testing.T, postPath, videoLinksJSON string) *httptest.Server {
 	return srv
 }
 
-// The api-fx path must win over the legacy API and pass its 4K HLS links through
-// untouched — the legacy /s/ hashes cap at 720p (premium stub above), video-links
-// is the only shape that streams >720p.
-func TestFilmixFXMoviePreferredOverLegacy(t *testing.T) {
+// Without a premium device token, preserve the api-fx quality ladder.
+func TestFilmixFXMoviePreferredWithoutPremiumToken(t *testing.T) {
 	legacyCalled := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/user_profile" {
+			_, _ = w.Write([]byte(`{"user_data":{"is_pro":false,"is_pro_plus":false}}`))
+			return
+		}
 		legacyCalled = true
 		w.WriteHeader(http.StatusNotFound)
 	}))

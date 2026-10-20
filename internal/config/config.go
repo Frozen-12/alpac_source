@@ -850,10 +850,8 @@ type FilmixSource struct {
 	// is consulted only when legacy fails — 403, blocked title, nothing playable.
 	// "primary": the pre-2026-09 behaviour, api-fx first when it offers ≥720p.
 	FXMode string `toml:"fx_mode"`
-	// Filmix account login/password for the api.filmix.tv (api-fx) flow. The legacy
-	// filmixapp.cyou /s/ hashes are capped at 720p server-side since 2026-07 — 4K/1080
-	// require an api-fx accessToken, which only login+password can obtain (the legacy
-	// 32-char device token is not accepted there).
+	// Optional credentials for the separate api-fx account. A verified PRO/PRO+
+	// device token takes precedence, including when fx_mode is primary.
 	UserAPITV   string `toml:"user_apitv"`
 	PasswdAPITV string `toml:"passwd_apitv"`
 	// Progressive turns filmix streams into single-file MP4 links served straight from the CDN
