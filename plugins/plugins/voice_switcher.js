@@ -116,15 +116,18 @@
       if (token) { result['X-Lampac-Token'] = token; result['X-Alpac-Token'] = token; }
       return result;
     }
-    function request(url, ticket, done) {
+    function request(url, ticket, done, failed) {
       var target;
-      try { target = authURL(url); } catch (e) { notice('Недопустимый адрес озвучки'); back(); return; }
+      try { target = authURL(url); } catch (e) {
+        notice('Недопустимый адрес озвучки'); back(); if (failed) failed(); return;
+      }
       pending = $.ajax({
         url: target, type: 'GET', dataType: 'text', timeout: 15000, headers: headers(),
         success: function (body) { if (ticket === epoch && context) { pending = null; done(body); } },
         error: function (_, status) {
           if (ticket === epoch && context && status !== 'abort') {
             pending = null; notice('Не удалось загрузить озвучку'); back();
+            if (failed) failed();
           }
         }
       });
@@ -190,6 +193,9 @@
           var time = video && isFinite(video.currentTime) ? video.currentTime : 0;
           var paused = video && video.paused;
           var preferred = selected.data.quality_switched;
+          if (selected.data.voice_quality_preference && preferred === selected.data.voice_quality_current) {
+            preferred = selected.data.voice_quality_preference;
+          }
           if (!preferred) {
             var oldMap = selected.data.quality || {};
             preferred = Object.keys(oldMap).find(function (q) {
@@ -203,7 +209,7 @@
             var old = findEpisode(previous, item.season, item.episode) || {};
             var next = Object.assign({}, old, {
               title: old.title || item.title || item.name, season: item.season, episode: item.episode,
-              voice_name: voice.title, subtitles: item.subtitles
+              voice_name: voice.title, subtitles: item.subtitles, fxdirect: item.fxdirect
             });
             var nextStream = chooseStream(item, preferred);
             if (item.method === 'call') {
@@ -215,7 +221,7 @@
                     next.url = actual.url; next.quality = actual.quality;
                   } catch (e) { next.url = ''; }
                   done();
-                });
+                }, function () { next.url = ''; done(); });
               };
             } else { next.url = nextStream.url; next.quality = nextStream.quality; }
             attach(next, selected.voices, index, selected.data.onvoicechange);
@@ -224,7 +230,8 @@
           var current = findEpisode(list, selected.season, selected.episode);
           current.url = stream.url; current.quality = stream.quality;
           selected.index = index;
-          Object.assign(selected.data, current, { playlist: list, quality_switched: stream.name });
+          Object.assign(selected.data, current, { playlist: list, quality_switched: stream.name,
+            voice_quality_preference: preferred, voice_quality_current: stream.name });
           if (selected.data.onvoicechange) selected.data.onvoicechange(index);
           // Reuse Lampa's quality-change path: it tears down the old HLS/native
           // engine correctly, while keeping the current episode and timeline.

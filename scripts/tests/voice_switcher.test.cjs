@@ -101,6 +101,17 @@ test('missing translation keeps current playback and playlist', () => {
   assert.match(f.messages.at(-1), /Этой серии нет/);
 });
 
+test('returns to the requested quality after a lower-quality translation', () => {
+  const f = fixture();
+  f.controller.switchVoice(1);
+  f.requests[0].options.success(JSON.stringify({data: [{method: 'play', s: 1, e: 3,
+    quality: {'1080p': 'lower-1080'}}]}));
+  assert.equal(f.changes[0].url, 'lower-1080');
+  f.controller.switchVoice(0);
+  f.requests[1].options.success(response());
+  assert.equal(f.changes[1].url, 'new-3-2160');
+});
+
 test('late response cannot change a different episode or a destroyed player', () => {
   const f = fixture();
   f.controller.switchVoice(1);
@@ -120,6 +131,21 @@ test('refuses to send credentials to a foreign source URL', () => {
   f.controller.switchVoice(1);
   assert.equal(f.requests.length, 0);
   assert.match(f.messages.at(-1), /Недопустимый адрес/);
+});
+
+test('failed lazy resolution completes instead of leaving the playlist loading', () => {
+  const f = fixture();
+  f.controller.switchVoice(1);
+  f.requests[0].options.success(JSON.stringify({data: [
+    {method: 'play', s: 1, e: 3, url: 'new-three'},
+    {method: 'call', s: 1, e: 4, url: 'https://server.test/resolve-four'}
+  ]}));
+  let completed = false;
+  const next = f.playlist()[1];
+  next.url(() => { completed = true; });
+  f.requests[1].options.error(null, 'timeout');
+  assert.equal(completed, true);
+  assert.equal(next.url, '');
 });
 
 test('paused playback remains paused and position is clamped to the new duration', () => {
